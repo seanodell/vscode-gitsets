@@ -1,0 +1,10 @@
+.vscode/**
+.DS_Store
+mise-tasks/**
+mise.toml
+src/**
+tsconfig.json
+package-lock.json
+**/*.map
+**/*.ts
+!out/**

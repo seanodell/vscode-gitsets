@@ -1,0 +1,214 @@
+{
+  "name": "git-sets",
+  "displayName": "Git Sets",
+  "description": "Create and manage Git Sets — collections of git worktrees — from inside VS Code",
+  "version": "0.1.0",
+  "publisher": "seanodell",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/seanodell/vscode-gitsets"
+  },
+  "homepage": "https://github.com/seanodell/vscode-gitsets#readme",
+  "bugs": {
+    "url": "https://github.com/seanodell/vscode-gitsets/issues"
+  },
+  "keywords": [
+    "git",
+    "worktree",
+    "workspace",
+    "multi-repo",
+    "branch"
+  ],
+  "galleryBanner": {
+    "color": "#1e1e2e",
+    "theme": "dark"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "SCM Providers",
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "views": {
+      "explorer": [
+        {
+          "id": "gitsets.view",
+          "name": "Git Sets",
+          "icon": "$(git-branch)",
+          "when": "workbenchState != empty"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "gitsets.addRepository",
+        "title": "Add Repository",
+        "category": "Git Sets",
+        "icon": "$(add)"
+      },
+      {
+        "command": "gitsets.removeRepository",
+        "title": "Remove Repository",
+        "category": "Git Sets",
+        "icon": "$(close)"
+      },
+      {
+        "command": "gitsets.openRepository",
+        "title": "Open Repository",
+        "category": "Git Sets",
+        "icon": "$(window)"
+      },
+      {
+        "command": "gitsets.refresh",
+        "title": "Refresh",
+        "category": "Git Sets",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "gitsets.openSettings",
+        "title": "Open Settings",
+        "category": "Git Sets",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "gitsets.addSet",
+        "title": "Add Set",
+        "category": "Git Sets",
+        "icon": "$(add)"
+      },
+      {
+        "command": "gitsets.removeSet",
+        "title": "Remove Set",
+        "category": "Git Sets",
+        "icon": "$(close)"
+      },
+      {
+        "command": "gitsets.openSet",
+        "title": "Open Set",
+        "category": "Git Sets",
+        "icon": "$(window)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "gitsets.refresh",
+          "when": "view == gitsets.view",
+          "group": "navigation@1"
+        },
+        {
+          "command": "gitsets.openSettings",
+          "when": "view == gitsets.view",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "gitsets.addRepository",
+          "when": "view == gitsets.view && viewItem == reposSection",
+          "group": "inline"
+        },
+        {
+          "command": "gitsets.openRepository",
+          "when": "view == gitsets.view && viewItem == repository",
+          "group": "inline@1"
+        },
+        {
+          "command": "gitsets.removeRepository",
+          "when": "view == gitsets.view && viewItem == repository",
+          "group": "inline@2"
+        },
+        {
+          "command": "gitsets.openRepository",
+          "when": "view == gitsets.view && viewItem == repository",
+          "group": "1_open"
+        },
+        {
+          "command": "gitsets.removeRepository",
+          "when": "view == gitsets.view && viewItem == repository",
+          "group": "1_modification"
+        },
+        {
+          "command": "gitsets.addSet",
+          "when": "view == gitsets.view && viewItem == setsSection",
+          "group": "inline"
+        },
+        {
+          "command": "gitsets.openSet",
+          "when": "view == gitsets.view && viewItem == set",
+          "group": "inline@1"
+        },
+        {
+          "command": "gitsets.removeSet",
+          "when": "view == gitsets.view && viewItem == set",
+          "group": "inline@2"
+        },
+        {
+          "command": "gitsets.openSet",
+          "when": "view == gitsets.view && viewItem == set",
+          "group": "1_open"
+        },
+        {
+          "command": "gitsets.removeSet",
+          "when": "view == gitsets.view && viewItem == set",
+          "group": "1_modification"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "gitsets.removeRepository",
+          "when": "false"
+        },
+        {
+          "command": "gitsets.openRepository",
+          "when": "false"
+        },
+        {
+          "command": "gitsets.addRepository",
+          "when": "workbenchState != empty"
+        },
+        {
+          "command": "gitsets.refresh",
+          "when": "workbenchState != empty"
+        },
+        {
+          "command": "gitsets.addSet",
+          "when": "workbenchState != empty"
+        },
+        {
+          "command": "gitsets.removeSet",
+          "when": "false"
+        },
+        {
+          "command": "gitsets.openSet",
+          "when": "false"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Git Sets",
+      "properties": {
+        "gitsets.newSetDefaultRoot": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "markdownDescription": "Default root folder under which new set folders are created. When empty, defaults to your home directory. Accepts an absolute path or the shorthands `~`, `${userHome}`, and `${env:VAR}`."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "tsc -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^3.9.2",
+    "typescript": "^5.5.0"
+  }
+}

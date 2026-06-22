@@ -1,0 +1,8 @@
+#!/usr/bin/env zsh
+#MISE description="Compile in watch mode (rebuild on change)"
+
+source "$REPO_ROOT/mise-tasks/_common.sh"
+
+cd "$REPO_ROOT"
+header "Watching for changes (Ctrl-C to stop)"
+exec npx tsc -watch -p ./

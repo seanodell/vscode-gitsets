@@ -1,0 +1,9 @@
+#!/usr/bin/env zsh
+#MISE description="Build the extension into a .vsix package"
+
+source "$REPO_ROOT/mise-tasks/_common.sh"
+
+cd "$REPO_ROOT"
+header "Packaging extension"
+npx @vscode/vsce package
+success "Built .vsix"

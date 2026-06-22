@@ -1,0 +1,9 @@
+#!/usr/bin/env zsh
+#MISE description="Type-check and compile the extension to out/"
+
+source "$REPO_ROOT/mise-tasks/_common.sh"
+
+cd "$REPO_ROOT"
+header "Compiling extension"
+npx tsc -p ./
+success "Compiled to out/"

@@ -1,0 +1,13 @@
+#!/usr/bin/env zsh
+#MISE description="Install npm dependencies"
+
+source "$REPO_ROOT/mise-tasks/_common.sh"
+
+header "Installing dependencies"
+cd "$REPO_ROOT"
+if [[ -f package-lock.json ]]; then
+  npm ci
+else
+  npm install
+fi
+success "Dependencies installed"

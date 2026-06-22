@@ -1,0 +1,21 @@
+#!/usr/bin/env zsh
+#MISE description="Build the .vsix and install it into VS Code"
+
+source "$REPO_ROOT/mise-tasks/_common.sh"
+
+cd "$REPO_ROOT"
+
+if ! command -v code >/dev/null 2>&1; then
+  error "The 'code' command is not on PATH."
+  info "In VS Code, run: Shell Command: Install 'code' command in PATH."
+  exit 1
+fi
+
+vsix="$REPO_ROOT/git-sets.vsix"
+
+header "Packaging extension"
+npx @vscode/vsce package --out "$vsix"
+
+header "Installing extension"
+code --install-extension "$vsix" --force
+success "Installed — reload VS Code to pick up the new build"
