@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import { runGit } from './git';
+import { buildPathTree, PathTree } from './tree';
 
 const CONFIG_SECTION = 'gitsets';
 const GITSETS_FILE = 'gitsets.json';
@@ -477,7 +478,7 @@ async function removeSet(provider: GitSetsProvider, sets: PathStore, node?: SetN
 
 // --- Tree --------------------------------------------------------------------
 
-type TreeNode = SectionNode | RepoNode | SetGroupNode | SetNode | SetMemberNode | MessageNode;
+type TreeNode = SectionNode | RepoNode | RepoGroupNode | SetGroupNode | SetNode | SetMemberNode | MessageNode;
 
 class GitSetsProvider implements vscode.TreeDataProvider<TreeNode> {
   private readonly _onDidChangeTreeData = new vscode.EventEmitter<TreeNode | undefined | void>();
@@ -504,14 +505,22 @@ class GitSetsProvider implements vscode.TreeDataProvider<TreeNode> {
 
     if (element instanceof SectionNode) {
       if (element.section === 'repos') {
-        return this.repos.list().map((repoPath) => new RepoNode(repoPath));
+        const tree = buildPathTree(this.repos.list());
+        return renderRepoLevel([], tree);
       }
-      return this.setChildren([]);
+      const entries = await this.loadSetEntries();
+      const tree = buildPathTree(entries.map((e) => e.path));
+      return renderSetLevel([], tree, entries);
+    }
+
+    if (element instanceof RepoGroupNode) {
+      return renderRepoLevel(element.prefix, element.subtree);
     }
 
     // Set hierarchy: grouping nodes drill down by path segment.
     if (element instanceof SetGroupNode) {
-      return this.setChildren(element.prefix);
+      const entries = await this.loadSetEntries();
+      return renderSetLevel(element.prefix, element.subtree, entries);
     }
 
     // A set expands to its worktree members, read from the .code-workspace.
@@ -526,9 +535,9 @@ class GitSetsProvider implements vscode.TreeDataProvider<TreeNode> {
     return [];
   }
 
-  // Resolve each stored set path to its name (from gitsets.json) so the tree
-  // can group by the path-like name. A missing/invalid manifest marks the set
-  // broken and falls back to the folder's basename.
+  // Resolve each stored set path to its name (from gitsets.json). A
+  // missing/invalid manifest marks the set broken and falls back to the
+  // folder's basename.
   private async loadSetEntries(): Promise<SetEntry[]> {
     return Promise.all(
       this.sets.list().map(async (setPath) => {
@@ -538,40 +547,6 @@ class GitSetsProvider implements vscode.TreeDataProvider<TreeNode> {
           : { path: setPath, name: path.basename(setPath), broken: true };
       }),
     );
-  }
-
-  // Build the level of the set tree at `prefix` (an array of name segments).
-  // Entries whose name has more depth become grouping nodes; entries whose
-  // name ends exactly here become set leaves.
-  private async setChildren(prefix: string[]): Promise<TreeNode[]> {
-    const depth = prefix.length;
-    const groups = new Set<string>();
-    const leaves: SetEntry[] = [];
-
-    for (const entry of await this.loadSetEntries()) {
-      const segments = entry.name.split('/');
-      if (segments.length <= depth) {
-        continue;
-      }
-      const matchesPrefix = prefix.every((seg, i) => segments[i] === seg);
-      if (!matchesPrefix) {
-        continue;
-      }
-      if (segments.length === depth + 1) {
-        leaves.push(entry);
-      } else {
-        groups.add(segments[depth]);
-      }
-    }
-
-    const nodes: TreeNode[] = [];
-    for (const seg of [...groups].sort()) {
-      nodes.push(new SetGroupNode([...prefix, seg]));
-    }
-    for (const entry of leaves.sort((a, b) => a.name.localeCompare(b.name))) {
-      nodes.push(new SetNode(entry));
-    }
-    return nodes;
   }
 }
 
@@ -588,8 +563,8 @@ class SectionNode extends vscode.TreeItem {
 }
 
 class RepoNode extends vscode.TreeItem {
-  constructor(public readonly repoPath: string) {
-    super(path.basename(repoPath), vscode.TreeItemCollapsibleState.None);
+  constructor(public readonly repoPath: string, label = path.basename(repoPath)) {
+    super(label, vscode.TreeItemCollapsibleState.None);
     this.id = `repo:${repoPath}`;
     this.description = repoPath;
     this.tooltip = repoPath;
@@ -599,18 +574,27 @@ class RepoNode extends vscode.TreeItem {
   }
 }
 
-class SetGroupNode extends vscode.TreeItem {
-  constructor(public readonly prefix: string[]) {
+class RepoGroupNode extends vscode.TreeItem {
+  constructor(public readonly prefix: string[], public readonly subtree: PathTree) {
     super(prefix[prefix.length - 1], vscode.TreeItemCollapsibleState.Expanded);
-    this.id = `setgroup:${prefix.join('/')}`;
+    this.id = `repogroup:${subtree.root}:${prefix.join('/')}`;
+    this.contextValue = 'repoGroup';
+    this.iconPath = new vscode.ThemeIcon('folder');
+  }
+}
+
+class SetGroupNode extends vscode.TreeItem {
+  constructor(public readonly prefix: string[], public readonly subtree: PathTree) {
+    super(prefix[prefix.length - 1], vscode.TreeItemCollapsibleState.Expanded);
+    this.id = `setgroup:${subtree.root}:${prefix.join('/')}`;
     this.contextValue = 'setGroup';
     this.iconPath = new vscode.ThemeIcon('folder');
   }
 }
 
 class SetNode extends vscode.TreeItem {
-  constructor(public readonly entry: SetEntry) {
-    super(entry.name.split('/').pop() ?? entry.name, vscode.TreeItemCollapsibleState.Collapsed);
+  constructor(public readonly entry: SetEntry, label = path.basename(entry.path)) {
+    super(label, vscode.TreeItemCollapsibleState.Collapsed);
     this.id = `set:${entry.path}`;
     this.description = entry.path;
     this.tooltip = entry.broken ? `${entry.path}\n(gitsets.json missing or invalid)` : entry.path;
@@ -638,6 +622,32 @@ class MessageNode extends vscode.TreeItem {
     this.id = id;
     this.iconPath = new vscode.ThemeIcon(icon);
   }
+}
+
+// --- tree rendering ----------------------------------------------------------
+
+function renderRepoLevel(prefix: string[], tree: PathTree): TreeNode[] {
+  const nodes: TreeNode[] = [];
+  for (const [seg, sub] of Object.entries(tree.groups)) {
+    nodes.push(new RepoGroupNode([...prefix, seg], sub));
+  }
+  for (const name of tree.leaves) {
+    nodes.push(new RepoNode(path.join(tree.root, ...prefix, name), name));
+  }
+  return nodes;
+}
+
+function renderSetLevel(prefix: string[], tree: PathTree, entries: SetEntry[]): TreeNode[] {
+  const byPath = new Map(entries.map((e) => [e.path, e]));
+  const nodes: TreeNode[] = [];
+  for (const [seg, sub] of Object.entries(tree.groups)) {
+    nodes.push(new SetGroupNode([...prefix, seg], sub));
+  }
+  for (const name of tree.leaves) {
+    const entry = byPath.get(path.join(tree.root, ...prefix, name));
+    if (entry) nodes.push(new SetNode(entry, name));
+  }
+  return nodes;
 }
 
 // --- util --------------------------------------------------------------------

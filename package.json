@@ -203,7 +203,8 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "tsc -p ./"
+    "vscode:prepublish": "tsc -p ./",
+    "test": "tsc -p ./ && node --test out/tree.test.js"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
