@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
+import type { Dirent } from 'node:fs';
 import * as os from 'node:os';
 import { runGit } from './git';
 import { buildPathTree, PathTree } from './tree';
@@ -9,166 +10,101 @@ const CONFIG_SECTION = 'gitsets';
 const GITSETS_FILE = 'gitsets.json';
 
 export function activate(context: vscode.ExtensionContext) {
-  // Repositories and sets are both owned by the workspace and stored opaquely
-  // in workspaceState as arrays of paths — never in the project tree or
-  // settings.json.
-  const repos = new PathStore(context.workspaceState, 'gitsets.repositories');
-  const sets = new PathStore(context.workspaceState, 'gitsets.sets');
-  const provider = new GitSetsProvider(repos, sets);
-
-  // Heal any legacy/corrupt entries (e.g. pre-array data) once on startup.
-  void Promise.all([repos.prune(), sets.prune()]).then(() => provider.refresh());
+  const provider = new GitSetsProvider();
 
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider('gitsets.view', provider),
     vscode.commands.registerCommand('gitsets.refresh', () => provider.refresh()),
-    vscode.commands.registerCommand('gitsets.addRepository', () => addRepository(provider, repos)),
-    vscode.commands.registerCommand('gitsets.removeRepository', (node?: RepoNode) => removeRepository(provider, repos, node)),
     vscode.commands.registerCommand('gitsets.openRepository', (node?: RepoNode) => openRepository(node)),
-    vscode.commands.registerCommand('gitsets.addSet', () => addSet(provider, repos, sets)),
-    vscode.commands.registerCommand('gitsets.removeSet', (node?: SetNode) => removeSet(provider, sets, node)),
+    vscode.commands.registerCommand('gitsets.addSet', () => addSet(provider)),
     vscode.commands.registerCommand('gitsets.openSet', (node?: SetNode) => openSet(node)),
     vscode.commands.registerCommand('gitsets.openSettings', () =>
       vscode.commands.executeCommand('workbench.action.openSettings', '@ext:seanodell.git-sets'),
     ),
+    vscode.workspace.onDidChangeConfiguration(e => {
+      if (e.affectsConfiguration(`${CONFIG_SECTION}.rootFolder`)) {
+        provider.refresh();
+      }
+    }),
   );
 }
 
 export function deactivate() {}
 
+// --- Discovery ---------------------------------------------------------------
+
+function getRootFolder(): string | undefined {
+  const configured = vscode.workspace.getConfiguration(CONFIG_SECTION).get<string>('rootFolder', '');
+  const trimmed = configured.trim();
+  return trimmed ? resolveRoot(trimmed) : undefined;
+}
+
+// VS Code does not expand these shorthands for settings read through the extension API.
+function resolveRoot(value: string): string {
+  let p = value.trim();
+  if (p === '~' || p.startsWith('~/') || p.startsWith('~\\')) {
+    p = path.join(os.homedir(), p.slice(1));
+  }
+  p = p.replace(/\$\{userHome\}/g, os.homedir());
+  p = p.replace(/\$\{env:([^}]+)\}/g, (_, name) => process.env[name] ?? '');
+  return p;
+}
+
+interface ScanResult {
+  repos: string[];
+  sets: string[];
+}
+
+// Walk rootFolder up to maxDepth levels, collecting git repository roots
+// (directories with a .git directory) and git sets (directories with a
+// gitsets.json file). Stops descending once a directory is classified.
+// Skips hidden directories and linked worktrees (.git file, not directory).
+async function scanRoots(rootFolder: string, maxDepth = 3): Promise<ScanResult> {
+  const repos: string[] = [];
+  const sets: string[] = [];
+
+  async function walk(dir: string, depth: number): Promise<void> {
+    if (depth > maxDepth) return;
+
+    let entries: Dirent[];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    if (entries.some(e => e.isFile() && e.name === GITSETS_FILE)) {
+      sets.push(dir);
+      return;
+    }
+
+    const gitEntry = entries.find(e => e.name === '.git');
+    if (gitEntry) {
+      if (gitEntry.isDirectory()) repos.push(dir);
+      return;
+    }
+
+    await Promise.all(
+      entries
+        .filter(e => e.isDirectory() && !e.name.startsWith('.'))
+        .map(e => walk(path.join(dir, e.name), depth + 1)),
+    );
+  }
+
+  await walk(rootFolder, 0);
+  repos.sort();
+  sets.sort();
+  return { repos, sets };
+}
+
 // --- Repositories ------------------------------------------------------------
 
-// Workspace-scoped, opaque list of paths backed by `workspaceState`. Used for
-// both repositories and set folders — each is just an array of strings.
-class PathStore {
-  constructor(
-    private readonly memento: vscode.Memento,
-    private readonly key: string,
-  ) {}
-
-  list(): string[] {
-    return PathStore.sanitize(this.memento.get<unknown>(this.key, []));
-  }
-
-  async add(value: string): Promise<boolean> {
-    const current = this.list();
-    if (current.includes(value)) {
-      return false;
-    }
-    await this.memento.update(this.key, [...current, value]);
-    return true;
-  }
-
-  async remove(value: string): Promise<void> {
-    await this.memento.update(
-      this.key,
-      this.list().filter((p) => p !== value),
-    );
-  }
-
-  // Rewrite storage to the sanitized form once, removing legacy/corrupt entries.
-  async prune(): Promise<void> {
-    const raw = this.memento.get<unknown>(this.key, []);
-    const clean = PathStore.sanitize(raw);
-    if (JSON.stringify(raw) !== JSON.stringify(clean)) {
-      await this.memento.update(this.key, clean);
-    }
-  }
-
-  // Drop anything that isn't a non-empty string, and de-duplicate. Tolerates
-  // corrupt or legacy data (e.g. old object entries) without crashing the view.
-  private static sanitize(raw: unknown): string[] {
-    if (!Array.isArray(raw)) {
-      return [];
-    }
-    const seen = new Set<string>();
-    const out: string[] = [];
-    for (const value of raw) {
-      if (typeof value === 'string' && value.length > 0 && !seen.has(value)) {
-        seen.add(value);
-        out.push(value);
-      }
-    }
-    return out;
-  }
-}
-
-// The extension operates on the open workspace; an empty window has nothing to
-// act on and no workspace to own the state.
-function hasWorkspace(): boolean {
-  return (vscode.workspace.workspaceFolders?.length ?? 0) > 0;
-}
-
-async function addRepository(provider: GitSetsProvider, repos: PathStore): Promise<void> {
-  if (!hasWorkspace()) {
-    vscode.window.showErrorMessage('Open a folder or workspace before adding a repository.');
-    return;
-  }
-
-  const picked = await vscode.window.showOpenDialog({
-    canSelectFolders: true,
-    canSelectFiles: false,
-    canSelectMany: false,
-    openLabel: 'Add Repository',
-    title: 'Select a Git Repository',
-  });
-  if (!picked || picked.length === 0) {
-    return;
-  }
-
-  const folder = picked[0].fsPath;
-
-  // A repository root has a `.git` *directory*. Linked worktrees and submodules
-  // have a `.git` *file* (a gitdir pointer) — reject those.
-  let isRepoRoot = false;
-  try {
-    const stat = await fs.stat(path.join(folder, '.git'));
-    isRepoRoot = stat.isDirectory();
-  } catch {
-    isRepoRoot = false;
-  }
-  if (!isRepoRoot) {
-    vscode.window.showErrorMessage(
-      `Not a git repository root: "${folder}" has no .git directory. ` +
-        `(Linked worktrees and submodules have a .git file, not a folder.)`,
-    );
-    return;
-  }
-
-  const added = await repos.add(folder);
-  if (!added) {
-    vscode.window.showInformationMessage(`Repository already added: ${folder}`);
-    return;
-  }
-  provider.refresh();
-}
-
-async function removeRepository(provider: GitSetsProvider, repos: PathStore, node?: RepoNode): Promise<void> {
-  if (!node) {
-    return;
-  }
-
-  const choice = await vscode.window.showWarningMessage(
-    `Remove "${node.repoPath}" from Git Sets?`,
-    { modal: true, detail: 'This only removes it from the list. The repository on disk is untouched.' },
-    'Remove',
-  );
-  if (choice !== 'Remove') {
-    return;
-  }
-
-  await repos.remove(node.repoPath);
-  provider.refresh();
-}
-
 // Open a repository in place, on whatever branch it currently sits on. The repo
-// is opened through a sibling `<basename>.code-workspace` (same naming as sets),
-// created on first open and reconciled on reopen so the repo's folder is always
-// listed — never touching git state.
+// is opened through a sibling `<basename>.code-workspace`, created on first
+// open and reconciled on reopen so the repo's folder is always listed — never
+// touching git state.
 async function openRepository(node?: RepoNode): Promise<void> {
-  if (!node) {
-    return;
-  }
+  if (!node) return;
 
   const repoPath = node.repoPath;
   const parent = path.dirname(repoPath);
@@ -180,7 +116,6 @@ async function openRepository(node?: RepoNode): Promise<void> {
   try {
     raw = await fs.readFile(wsPath, 'utf8');
   } catch (err) {
-    // Absent is the common case: create a fresh workspace listing this repo.
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
       await writeCodeWorkspace(parent, fileName, [base]);
     } else {
@@ -201,10 +136,8 @@ async function openRepository(node?: RepoNode): Promise<void> {
     }
 
     const folders = Array.isArray(parsed.folders) ? parsed.folders : [];
-    // Membership by resolved absolute path, so a folder recorded as either a
-    // relative or absolute path is recognized and never duplicated.
     const present = folders.some(
-      (f) => typeof f.path === 'string' && path.resolve(parent, f.path) === repoPath,
+      f => typeof f.path === 'string' && path.resolve(parent, f.path) === repoPath,
     );
     if (!present) {
       parsed.folders = [...folders, { path: base }];
@@ -234,28 +167,49 @@ interface SetEntry {
   broken: boolean;
 }
 
-// Resolve a configured root path. Empty means the user's home directory.
-// VS Code does not expand these for settings read through the extension API,
-// so we do it ourselves.
-function resolveRoot(value: string): string {
-  let p = value.trim();
-  if (!p) {
-    return os.homedir();
+async function readGitSet(setFolder: string): Promise<GitSet | undefined> {
+  try {
+    const raw = await fs.readFile(path.join(setFolder, GITSETS_FILE), 'utf8');
+    return JSON.parse(raw) as GitSet;
+  } catch {
+    return undefined;
   }
-  if (p === '~' || p.startsWith('~/') || p.startsWith('~\\')) {
-    p = path.join(os.homedir(), p.slice(1));
-  }
-  p = p.replace(/\$\{userHome\}/g, os.homedir());
-  p = p.replace(/\$\{env:([^}]+)\}/g, (_, name) => process.env[name] ?? '');
-  return p;
 }
 
-function getDefaultSetRoot(): string {
-  const configured = vscode.workspace.getConfiguration(CONFIG_SECTION).get<string>('newSetDefaultRoot', '');
-  return resolveRoot(configured);
+async function writeGitSet(setFolder: string, set: GitSet): Promise<void> {
+  await fs.mkdir(setFolder, { recursive: true });
+  await fs.writeFile(path.join(setFolder, GITSETS_FILE), JSON.stringify(set, null, 2) + '\n', 'utf8');
 }
 
-// Validate a set name as a git branch name (slashes allowed as hierarchy).
+async function writeCodeWorkspace(dir: string, fileName: string, folders: string[]): Promise<void> {
+  const content = { folders: folders.map(f => ({ path: f })) };
+  await fs.writeFile(path.join(dir, fileName), JSON.stringify(content, null, 2) + '\n', 'utf8');
+}
+
+async function findWorkspaceFile(setFolder: string): Promise<string | undefined> {
+  try {
+    const entries = await fs.readdir(setFolder);
+    const wsFile = entries.find((e: string) => e.endsWith('.code-workspace'));
+    return wsFile ? path.join(setFolder, wsFile) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function readWorkspaceFolders(setFolder: string): Promise<string[] | undefined> {
+  const wsPath = await findWorkspaceFile(setFolder);
+  if (!wsPath) return undefined;
+  try {
+    const raw = await fs.readFile(wsPath, 'utf8');
+    const parsed = JSON.parse(raw) as { folders?: { path?: string }[] };
+    return (parsed.folders ?? [])
+      .map(f => f.path)
+      .filter((p): p is string => typeof p === 'string' && p.length > 0);
+  } catch {
+    return undefined;
+  }
+}
+
 function validateSetName(raw: string): string | undefined {
   const v = raw.trim();
   if (!v) return 'Name cannot be empty';
@@ -271,61 +225,8 @@ function validateSetName(raw: string): string | undefined {
   return undefined;
 }
 
-async function readGitSet(setFolder: string): Promise<GitSet | undefined> {
-  try {
-    const raw = await fs.readFile(path.join(setFolder, GITSETS_FILE), 'utf8');
-    return JSON.parse(raw) as GitSet;
-  } catch {
-    return undefined;
-  }
-}
-
-async function writeGitSet(setFolder: string, set: GitSet): Promise<void> {
-  await fs.mkdir(setFolder, { recursive: true });
-  await fs.writeFile(path.join(setFolder, GITSETS_FILE), JSON.stringify(set, null, 2) + '\n', 'utf8');
-}
-
-// Generate the multi-root .code-workspace that lists each worktree folder as a
-// root, so opening it gives a ready-to-go workspace.
-async function writeCodeWorkspace(setFolder: string, fileName: string, worktrees: string[]): Promise<void> {
-  const content = { folders: worktrees.map((w) => ({ path: w })) };
-  await fs.writeFile(path.join(setFolder, fileName), JSON.stringify(content, null, 2) + '\n', 'utf8');
-}
-
-// Locate the .code-workspace inside a set folder (absolute path), if any.
-async function findWorkspaceFile(setFolder: string): Promise<string | undefined> {
-  try {
-    const entries = await fs.readdir(setFolder);
-    const wsFile = entries.find((e: string) => e.endsWith('.code-workspace'));
-    return wsFile ? path.join(setFolder, wsFile) : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-// The .code-workspace is the single source of truth for a set's member folders.
-// Returns the relative worktree paths, or undefined if no readable workspace
-// file is present.
-async function readWorkspaceFolders(setFolder: string): Promise<string[] | undefined> {
-  const wsPath = await findWorkspaceFile(setFolder);
-  if (!wsPath) {
-    return undefined;
-  }
-  try {
-    const raw = await fs.readFile(wsPath, 'utf8');
-    const parsed = JSON.parse(raw) as { folders?: { path?: string }[] };
-    return (parsed.folders ?? [])
-      .map((f) => f.path)
-      .filter((p): p is string => typeof p === 'string' && p.length > 0);
-  } catch {
-    return undefined;
-  }
-}
-
 async function openSet(node?: SetNode): Promise<void> {
-  if (!node) {
-    return;
-  }
+  if (!node) return;
   const wsPath = await findWorkspaceFile(node.entry.path);
   if (!wsPath) {
     vscode.window.showErrorMessage(`No .code-workspace found in "${node.entry.path}".`);
@@ -334,15 +235,16 @@ async function openSet(node?: SetNode): Promise<void> {
   await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(wsPath), { forceNewWindow: true });
 }
 
-async function addSet(provider: GitSetsProvider, repos: PathStore, sets: PathStore): Promise<void> {
-  if (!hasWorkspace()) {
-    vscode.window.showErrorMessage('Open a folder or workspace before adding a set.');
+async function addSet(provider: GitSetsProvider): Promise<void> {
+  const rootFolder = getRootFolder();
+  if (!rootFolder) {
+    vscode.window.showErrorMessage('Configure gitsets.rootFolder in settings before creating a set.');
     return;
   }
 
-  const repoPaths = repos.list();
+  const { repos: repoPaths } = await scanRoots(rootFolder);
   if (repoPaths.length === 0) {
-    vscode.window.showErrorMessage('Add a repository before creating a set.');
+    vscode.window.showErrorMessage(`No git repositories found in "${rootFolder}".`);
     return;
   }
 
@@ -353,25 +255,21 @@ async function addSet(provider: GitSetsProvider, repos: PathStore, sets: PathSto
     placeHolder: 'e.g. feature/login-bug',
     validateInput: validateSetName,
   });
-  if (name === undefined) {
-    return;
-  }
+  if (name === undefined) return;
   const setName = name.trim();
 
-  // 2. Repositories (multi-select from the added repos).
+  // 2. Repositories (multi-select from discovered repos).
   const picks = await vscode.window.showQuickPick(
-    repoPaths.map((repo) => ({ label: path.basename(repo), description: repo, repo })),
+    repoPaths.map(repo => ({ label: path.basename(repo), description: repo, repo })),
     {
       canPickMany: true,
       title: 'New Set — Repositories',
       placeHolder: 'Select one or more repositories for the set',
     },
   );
-  if (!picks || picks.length === 0) {
-    return;
-  }
+  if (!picks || picks.length === 0) return;
 
-  const basenames = picks.map((p) => path.basename(p.repo));
+  const basenames = picks.map(p => path.basename(p.repo));
   if (new Set(basenames).size !== basenames.length) {
     vscode.window.showErrorMessage(
       'Selected repositories have duplicate folder names; they cannot share one set folder.',
@@ -379,37 +277,18 @@ async function addSet(provider: GitSetsProvider, repos: PathStore, sets: PathSto
     return;
   }
 
-  // 3. Root folder (defaults to the configured default set root).
-  const rootPick = await vscode.window.showOpenDialog({
-    canSelectFolders: true,
-    canSelectFiles: false,
-    canSelectMany: false,
-    openLabel: 'Use as Set Root',
-    title: 'New Set — Root Folder',
-    defaultUri: vscode.Uri.file(getDefaultSetRoot()),
-  });
-  if (!rootPick || rootPick.length === 0) {
-    return;
-  }
-  const root = rootPick[0].fsPath;
+  const setFolder = path.join(rootFolder, ...setName.split('/'));
 
-  const setFolder = path.join(root, ...setName.split('/'));
-
-  // Refuse to clobber an existing folder.
-  let exists = true;
   try {
     await fs.access(setFolder);
-  } catch {
-    exists = false;
-  }
-  if (exists) {
     vscode.window.showErrorMessage(`A folder already exists at: ${setFolder}`);
     return;
+  } catch {
+    // Expected: folder does not yet exist.
   }
 
   await fs.mkdir(setFolder, { recursive: true });
 
-  // Create a worktree per repo, branching from main.
   const worktrees: string[] = [];
   const failures: string[] = [];
   for (const pick of picks) {
@@ -429,13 +308,10 @@ async function addSet(provider: GitSetsProvider, repos: PathStore, sets: PathSto
     return;
   }
 
-  // gitsets.json stores only the path-like name; the .code-workspace owns the
-  // member folder list and is the openable artifact.
   const leaf = setName.split('/').pop() ?? setName;
   const workspaceFile = `${leaf}.code-workspace`;
   await writeGitSet(setFolder, { name: setName });
   await writeCodeWorkspace(setFolder, workspaceFile, worktrees);
-  await sets.add(setFolder);
   provider.refresh();
 
   if (failures.length > 0) {
@@ -455,27 +331,6 @@ async function addSet(provider: GitSetsProvider, repos: PathStore, sets: PathSto
   }
 }
 
-async function removeSet(provider: GitSetsProvider, sets: PathStore, node?: SetNode): Promise<void> {
-  if (!node) {
-    return;
-  }
-
-  const choice = await vscode.window.showWarningMessage(
-    `Remove set "${node.entry.name}"?`,
-    {
-      modal: true,
-      detail: 'This removes the set from this workspace. The folder and worktrees on disk are left untouched.',
-    },
-    'Remove',
-  );
-  if (choice !== 'Remove') {
-    return;
-  }
-
-  await sets.remove(node.entry.path);
-  provider.refresh();
-}
-
 // --- Tree --------------------------------------------------------------------
 
 type TreeNode = SectionNode | RepoNode | RepoGroupNode | SetGroupNode | SetNode | SetMemberNode | MessageNode;
@@ -484,13 +339,22 @@ class GitSetsProvider implements vscode.TreeDataProvider<TreeNode> {
   private readonly _onDidChangeTreeData = new vscode.EventEmitter<TreeNode | undefined | void>();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
-  constructor(
-    private readonly repos: PathStore,
-    private readonly sets: PathStore,
-  ) {}
+  // Cached per refresh cycle; cleared by refresh() so the next render rescans.
+  private _scanPromise: Promise<ScanResult> | undefined;
 
   refresh(): void {
+    this._scanPromise = undefined;
     this._onDidChangeTreeData.fire();
+  }
+
+  scan(): Promise<ScanResult> {
+    if (!this._scanPromise) {
+      const rootFolder = getRootFolder();
+      this._scanPromise = rootFolder
+        ? scanRoots(rootFolder)
+        : Promise.resolve({ repos: [], sets: [] });
+    }
+    return this._scanPromise;
   }
 
   getTreeItem(element: TreeNode): vscode.TreeItem {
@@ -498,18 +362,21 @@ class GitSetsProvider implements vscode.TreeDataProvider<TreeNode> {
   }
 
   async getChildren(element?: TreeNode): Promise<TreeNode[]> {
-    // Top level: two fixed sections.
     if (!element) {
+      if (!getRootFolder()) {
+        return [new MessageNode('Configure gitsets.rootFolder in settings', 'gear', 'msg:no-root')];
+      }
       return [new SectionNode('repos'), new SectionNode('sets')];
     }
 
     if (element instanceof SectionNode) {
+      const { repos, sets } = await this.scan();
       if (element.section === 'repos') {
-        const tree = buildPathTree(this.repos.list());
+        const tree = buildPathTree(repos);
         return renderRepoLevel([], tree);
       }
-      const entries = await this.loadSetEntries();
-      const tree = buildPathTree(entries.map((e) => e.path));
+      const entries = await loadSetEntries(sets);
+      const tree = buildPathTree(sets);
       return renderSetLevel([], tree, entries);
     }
 
@@ -517,46 +384,39 @@ class GitSetsProvider implements vscode.TreeDataProvider<TreeNode> {
       return renderRepoLevel(element.prefix, element.subtree);
     }
 
-    // Set hierarchy: grouping nodes drill down by path segment.
     if (element instanceof SetGroupNode) {
-      const entries = await this.loadSetEntries();
+      const { sets } = await this.scan();
+      const entries = await loadSetEntries(sets);
       return renderSetLevel(element.prefix, element.subtree, entries);
     }
 
-    // A set expands to its flat list of worktree members.
     if (element instanceof SetNode) {
       const folders = await readWorkspaceFolders(element.entry.path);
       if (!folders) {
         return [new MessageNode('workspace file missing or invalid', 'warning', `msg:${element.entry.path}`)];
       }
-      return folders.map((rel) => new SetMemberNode(path.basename(rel), path.join(element.entry.path, rel)));
+      return folders.map(rel => new SetMemberNode(path.basename(rel), path.join(element.entry.path, rel)));
     }
 
     return [];
   }
+}
 
-  // Resolve each stored set path to its name (from gitsets.json). A
-  // missing/invalid manifest marks the set broken and falls back to the
-  // folder's basename.
-  private async loadSetEntries(): Promise<SetEntry[]> {
-    return Promise.all(
-      this.sets.list().map(async (setPath) => {
-        const gitSet = await readGitSet(setPath);
-        return gitSet
-          ? { path: setPath, name: gitSet.name, broken: false }
-          : { path: setPath, name: path.basename(setPath), broken: true };
-      }),
-    );
-  }
+async function loadSetEntries(setPaths: string[]): Promise<SetEntry[]> {
+  return Promise.all(
+    setPaths.map(async setPath => {
+      const gitSet = await readGitSet(setPath);
+      return gitSet
+        ? { path: setPath, name: gitSet.name, broken: false }
+        : { path: setPath, name: path.basename(setPath), broken: true };
+    }),
+  );
 }
 
 class SectionNode extends vscode.TreeItem {
   constructor(public readonly section: 'repos' | 'sets') {
     const isRepos = section === 'repos';
-    super(
-      isRepos ? 'Repositories' : 'Sets',
-      isRepos ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Expanded,
-    );
+    super(isRepos ? 'Repositories' : 'Sets', vscode.TreeItemCollapsibleState.Expanded);
     this.id = `section:${section}`;
     this.contextValue = isRepos ? 'reposSection' : 'setsSection';
   }
@@ -636,7 +496,7 @@ function renderRepoLevel(prefix: string[], tree: PathTree): TreeNode[] {
 }
 
 function renderSetLevel(prefix: string[], tree: PathTree, entries: SetEntry[]): TreeNode[] {
-  const byPath = new Map(entries.map((e) => [e.path, e]));
+  const byPath = new Map(entries.map(e => [e.path, e]));
   const nodes: TreeNode[] = [];
   for (const [seg, sub] of Object.entries(tree.groups)) {
     nodes.push(new SetGroupNode([...prefix, seg], sub));
