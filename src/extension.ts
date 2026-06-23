@@ -209,6 +209,8 @@ interface SetEntry {
   broken: boolean;
 }
 
+type RepoPickItem = vscode.QuickPickItem & { repo?: string };
+
 async function readGitSet(setFolder: string): Promise<GitSet | undefined> {
   try {
     const raw = await fs.readFile(path.join(setFolder, GITSETS_FILE), 'utf8');
@@ -300,16 +302,19 @@ async function addSet(provider: GitSetsProvider): Promise<void> {
   if (name === undefined) return;
   const setName = name.trim();
 
-  // 2. Repositories (multi-select from discovered repos).
-  const picks = await vscode.window.showQuickPick(
-    repoPaths.map(repo => ({ label: path.basename(repo), description: repo, repo })),
+  // 2. Repositories (multi-select from discovered repos, shown as folder tree).
+  const repoPicks = await vscode.window.showQuickPick<RepoPickItem>(
+    buildRepoPicks(repoPaths, rootFolder),
     {
       canPickMany: true,
       title: 'New Set — Repositories',
       placeHolder: 'Select one or more repositories for the set',
     },
   );
-  if (!picks || picks.length === 0) return;
+  if (!repoPicks || repoPicks.length === 0) return;
+  // Separator items cannot be selected; every returned item has repo defined.
+  const picks = repoPicks.filter((p): p is RepoPickItem & { repo: string } => p.repo !== undefined);
+  if (picks.length === 0) return;
 
   const basenames = picks.map(p => path.basename(p.repo));
   if (new Set(basenames).size !== basenames.length) {
@@ -558,6 +563,40 @@ function renderSetLevel(prefix: string[], tree: PathTree, entries: SetEntry[]): 
     if (entry) nodes.push(new SetNode(entry, name));
   }
   return nodes;
+}
+
+function buildRepoPicks(repoPaths: string[], root: string): RepoPickItem[] {
+  if (repoPaths.length === 0) return [];
+
+  const rootLevel: string[] = [];
+  const groups = new Map<string, string[]>();
+
+  for (const repoPath of repoPaths) {
+    const segs = path.relative(root, repoPath).split(path.sep).filter(Boolean);
+    if (segs.length === 1) {
+      rootLevel.push(repoPath);
+    } else {
+      const groupKey = segs.slice(0, -1).join('/');
+      const bucket = groups.get(groupKey);
+      if (bucket) bucket.push(repoPath);
+      else groups.set(groupKey, [repoPath]);
+    }
+  }
+
+  const items: RepoPickItem[] = [];
+
+  for (const repoPath of rootLevel.sort()) {
+    items.push({ label: path.basename(repoPath), description: repoPath, repo: repoPath });
+  }
+
+  for (const [groupKey, repos] of [...groups.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    items.push({ label: groupKey, kind: vscode.QuickPickItemKind.Separator });
+    for (const repoPath of [...repos].sort()) {
+      items.push({ label: path.basename(repoPath), description: groupKey, repo: repoPath });
+    }
+  }
+
+  return items;
 }
 
 // --- util --------------------------------------------------------------------
