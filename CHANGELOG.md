@@ -2,6 +2,17 @@
 
 All notable changes to the Git Sets extension are documented here.
 
+## [0.2.0] - 2026-06-23
+
+### Added
+- Repos and sets displayed as path trees with common ancestor prefix stripped and single-child directory compression
+
+### Changed
+- Colored icons distinguish repositories (blue) from set members (green)
+- Group nodes show expand arrow only — no folder icon
+- Healthy sets show no icon; broken sets retain the warning icon
+- Set members always shown flat (they share a common parent folder)
+
 ## [0.1.0] - 2026-06-22
 
 ### Added
