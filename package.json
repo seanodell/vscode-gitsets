@@ -2,7 +2,7 @@
   "name": "git-sets",
   "displayName": "Git Sets",
   "description": "Create and manage Git Sets — collections of git worktrees — from inside VS Code",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "publisher": "seanodell",
   "license": "Apache-2.0",
   "repository": {

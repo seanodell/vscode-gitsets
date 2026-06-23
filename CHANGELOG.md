@@ -2,6 +2,12 @@
 
 All notable changes to the Git Sets extension are documented here.
 
+## [0.3.1] - 2026-06-23
+
+### Added
+- **Expand All** / **Collapse All** buttons in the GitSets panel header; folders default to collapsed
+- Repository picker when creating a set groups repos by folder, matching the configured root folder hierarchy; folder name shown as description and as a separator between groups — typing an org name filters to just that group
+
 ## [0.3.0] - 2026-06-23
 
 ### Added
