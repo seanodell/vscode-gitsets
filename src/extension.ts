@@ -12,6 +12,36 @@ const GITSETS_FILE = 'gitsets.json';
 export function activate(context: vscode.ExtensionContext) {
   const provider = new GitSetsProvider();
 
+  // Watchers are scoped to the configured root folder and recreated when it
+  // changes. Stored outside subscriptions so they can be disposed on reset.
+  let watchers: vscode.Disposable[] = [];
+
+  function resetWatchers(): void {
+    watchers.forEach(d => d.dispose());
+    watchers = [];
+    const rootFolder = getRootFolder();
+    if (!rootFolder) return;
+    const base = vscode.Uri.file(rootFolder);
+    const refresh = () => provider.refresh();
+    const gitWatcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(base, '**/.git'),
+    );
+    const setsWatcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(base, '**/gitsets.json'),
+    );
+    watchers = [
+      gitWatcher,
+      gitWatcher.onDidCreate(refresh),
+      gitWatcher.onDidDelete(refresh),
+      setsWatcher,
+      setsWatcher.onDidCreate(refresh),
+      setsWatcher.onDidDelete(refresh),
+      setsWatcher.onDidChange(refresh),
+    ];
+  }
+
+  resetWatchers();
+
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider('gitsets.view', provider),
     vscode.commands.registerCommand('gitsets.refresh', () => provider.refresh()),
@@ -23,9 +53,11 @@ export function activate(context: vscode.ExtensionContext) {
     ),
     vscode.workspace.onDidChangeConfiguration(e => {
       if (e.affectsConfiguration(`${CONFIG_SECTION}.rootFolder`)) {
+        resetWatchers();
         provider.refresh();
       }
     }),
+    { dispose: () => { watchers.forEach(d => d.dispose()); watchers = []; } },
   );
 }
 
