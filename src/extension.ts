@@ -523,13 +523,13 @@ class GitSetsProvider implements vscode.TreeDataProvider<TreeNode> {
       return renderSetLevel(element.prefix, element.subtree, entries);
     }
 
-    // A set expands to its worktree members, read from the .code-workspace.
+    // A set expands to its flat list of worktree members.
     if (element instanceof SetNode) {
       const folders = await readWorkspaceFolders(element.entry.path);
       if (!folders) {
         return [new MessageNode('workspace file missing or invalid', 'warning', `msg:${element.entry.path}`)];
       }
-      return folders.map((rel) => new SetMemberNode(rel, path.join(element.entry.path, rel)));
+      return folders.map((rel) => new SetMemberNode(path.basename(rel), path.join(element.entry.path, rel)));
     }
 
     return [];
@@ -568,7 +568,7 @@ class RepoNode extends vscode.TreeItem {
     this.id = `repo:${repoPath}`;
     this.description = repoPath;
     this.tooltip = repoPath;
-    this.iconPath = new vscode.ThemeIcon('repo');
+    this.iconPath = new vscode.ThemeIcon('repo', new vscode.ThemeColor('notificationsInfoIcon.foreground'));
     this.contextValue = 'repository';
     this.resourceUri = vscode.Uri.file(repoPath);
   }
@@ -579,7 +579,6 @@ class RepoGroupNode extends vscode.TreeItem {
     super(prefix[prefix.length - 1], vscode.TreeItemCollapsibleState.Expanded);
     this.id = `repogroup:${subtree.root}:${prefix.join('/')}`;
     this.contextValue = 'repoGroup';
-    this.iconPath = new vscode.ThemeIcon('folder');
   }
 }
 
@@ -588,7 +587,6 @@ class SetGroupNode extends vscode.TreeItem {
     super(prefix[prefix.length - 1], vscode.TreeItemCollapsibleState.Expanded);
     this.id = `setgroup:${subtree.root}:${prefix.join('/')}`;
     this.contextValue = 'setGroup';
-    this.iconPath = new vscode.ThemeIcon('folder');
   }
 }
 
@@ -598,19 +596,19 @@ class SetNode extends vscode.TreeItem {
     this.id = `set:${entry.path}`;
     this.description = entry.path;
     this.tooltip = entry.broken ? `${entry.path}\n(gitsets.json missing or invalid)` : entry.path;
-    this.iconPath = new vscode.ThemeIcon(entry.broken ? 'warning' : 'layers');
+    if (entry.broken) this.iconPath = new vscode.ThemeIcon('warning');
     this.contextValue = 'set';
     this.resourceUri = vscode.Uri.file(entry.path);
   }
 }
 
 class SetMemberNode extends vscode.TreeItem {
-  constructor(relPath: string, worktreePath: string) {
-    super(path.basename(relPath), vscode.TreeItemCollapsibleState.None);
+  constructor(label: string, worktreePath: string) {
+    super(label, vscode.TreeItemCollapsibleState.None);
     this.id = `setmember:${worktreePath}`;
     this.description = worktreePath;
     this.tooltip = worktreePath;
-    this.iconPath = new vscode.ThemeIcon('git-branch');
+    this.iconPath = new vscode.ThemeIcon('git-branch', new vscode.ThemeColor('gitDecoration.addedResourceForeground'));
     this.contextValue = 'setMember';
     this.resourceUri = vscode.Uri.file(worktreePath);
   }
