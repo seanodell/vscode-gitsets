@@ -2,6 +2,18 @@
 
 All notable changes to the Git Sets extension are documented here.
 
+## [0.3.0] - 2026-06-23
+
+### Added
+- Filesystem watchers on `**/.git` and `**/gitsets.json` under the root folder — the tree refreshes automatically when repos or sets appear or disappear
+
+### Changed
+- Repos and sets are now discovered by scanning a configurable root folder (`gitsets.rootFolder`) instead of being manually registered per workspace
+- Removed **Add Repository**, **Remove Repository**, and **Remove Set** commands — the filesystem is the source of truth
+- **Add Set** now always creates the set folder under `gitsets.rootFolder`; no root folder picker step
+- Extension no longer requires an open workspace
+- `gitsets.newSetDefaultRoot` renamed to `gitsets.rootFolder`
+
 ## [0.2.0] - 2026-06-23
 
 ### Added
