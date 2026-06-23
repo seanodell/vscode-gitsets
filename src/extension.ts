@@ -42,9 +42,19 @@ export function activate(context: vscode.ExtensionContext) {
 
   resetWatchers();
 
+  const treeView = vscode.window.createTreeView('gitsets.view', {
+    treeDataProvider: provider,
+    showCollapseAll: true,
+  });
+
   context.subscriptions.push(
-    vscode.window.registerTreeDataProvider('gitsets.view', provider),
+    treeView,
     vscode.commands.registerCommand('gitsets.refresh', () => provider.refresh()),
+    vscode.commands.registerCommand('gitsets.expandAll', async () => {
+      if (!getRootFolder()) return;
+      await treeView.reveal(provider.reposSection, { expand: 3 });
+      await treeView.reveal(provider.setsSection, { expand: 3 });
+    }),
     vscode.commands.registerCommand('gitsets.openRepository', (node?: RepoNode) => openRepository(node)),
     vscode.commands.registerCommand('gitsets.addSet', () => addSet(provider)),
     vscode.commands.registerCommand('gitsets.openSet', (node?: SetNode) => openSet(node)),
@@ -371,6 +381,10 @@ class GitSetsProvider implements vscode.TreeDataProvider<TreeNode> {
   private readonly _onDidChangeTreeData = new vscode.EventEmitter<TreeNode | undefined | void>();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
+  // Stable references required by TreeView.reveal(), which matches by identity.
+  readonly reposSection = new SectionNode('repos');
+  readonly setsSection = new SectionNode('sets');
+
   // Cached per refresh cycle; cleared by refresh() so the next render rescans.
   private _scanPromise: Promise<ScanResult> | undefined;
 
@@ -393,12 +407,18 @@ class GitSetsProvider implements vscode.TreeDataProvider<TreeNode> {
     return element;
   }
 
+  // Required by TreeView.reveal(). Section nodes are roots so their parent is
+  // undefined; we only ever reveal section nodes so this is sufficient.
+  getParent(_element: TreeNode): undefined {
+    return undefined;
+  }
+
   async getChildren(element?: TreeNode): Promise<TreeNode[]> {
     if (!element) {
       if (!getRootFolder()) {
         return [new MessageNode('Configure gitsets.rootFolder in settings', 'gear', 'msg:no-root')];
       }
-      return [new SectionNode('repos'), new SectionNode('sets')];
+      return [this.reposSection, this.setsSection];
     }
 
     if (element instanceof SectionNode) {
@@ -468,7 +488,7 @@ class RepoNode extends vscode.TreeItem {
 
 class RepoGroupNode extends vscode.TreeItem {
   constructor(public readonly prefix: string[], public readonly subtree: PathTree) {
-    super(prefix[prefix.length - 1], vscode.TreeItemCollapsibleState.Expanded);
+    super(prefix[prefix.length - 1], vscode.TreeItemCollapsibleState.Collapsed);
     this.id = `repogroup:${subtree.root}:${prefix.join('/')}`;
     this.contextValue = 'repoGroup';
   }
@@ -476,7 +496,7 @@ class RepoGroupNode extends vscode.TreeItem {
 
 class SetGroupNode extends vscode.TreeItem {
   constructor(public readonly prefix: string[], public readonly subtree: PathTree) {
-    super(prefix[prefix.length - 1], vscode.TreeItemCollapsibleState.Expanded);
+    super(prefix[prefix.length - 1], vscode.TreeItemCollapsibleState.Collapsed);
     this.id = `setgroup:${subtree.root}:${prefix.join('/')}`;
     this.contextValue = 'setGroup';
   }

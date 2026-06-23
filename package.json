@@ -51,6 +51,12 @@
         "icon": "$(window)"
       },
       {
+        "command": "gitsets.expandAll",
+        "title": "Expand All",
+        "category": "Git Sets",
+        "icon": "$(expand-all)"
+      },
+      {
         "command": "gitsets.refresh",
         "title": "Refresh",
         "category": "Git Sets",
@@ -78,14 +84,19 @@
     "menus": {
       "view/title": [
         {
-          "command": "gitsets.refresh",
+          "command": "gitsets.expandAll",
           "when": "view == gitsets.view",
           "group": "navigation@1"
         },
         {
-          "command": "gitsets.openSettings",
+          "command": "gitsets.refresh",
           "when": "view == gitsets.view",
           "group": "navigation@2"
+        },
+        {
+          "command": "gitsets.openSettings",
+          "when": "view == gitsets.view",
+          "group": "navigation@3"
         }
       ],
       "view/item/context": [
@@ -109,6 +120,10 @@
         {
           "command": "gitsets.openRepository",
           "when": "false"
+        },
+        {
+          "command": "gitsets.expandAll",
+          "when": "view == gitsets.view"
         },
         {
           "command": "gitsets.refresh",
