@@ -192,6 +192,7 @@
   },
   "scripts": {
     "vscode:prepublish": "tsc -p ./",
+    "package": "vsce package",
     "test": "tsc -p ./ && node --test out/tree.test.js"
   },
   "devDependencies": {
