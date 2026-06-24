@@ -79,6 +79,18 @@
         "title": "Open Set",
         "category": "Git Sets",
         "icon": "$(window)"
+      },
+      {
+        "command": "gitsets.addFavorite",
+        "title": "Add to Favorites",
+        "category": "Git Sets",
+        "icon": "$(heart)"
+      },
+      {
+        "command": "gitsets.removeFavorite",
+        "title": "Remove from Favorites",
+        "category": "Git Sets",
+        "icon": "$(heart-filled)"
       }
     ],
     "menus": {
@@ -102,7 +114,7 @@
       "view/item/context": [
         {
           "command": "gitsets.openRepository",
-          "when": "view == gitsets.view && viewItem == repository",
+          "when": "view == gitsets.view && (viewItem == repository || viewItem == repository.favorited)",
           "group": "inline"
         },
         {
@@ -113,6 +125,21 @@
         {
           "command": "gitsets.openSet",
           "when": "view == gitsets.view && viewItem == set",
+          "group": "inline"
+        },
+        {
+          "command": "gitsets.openSet",
+          "when": "view == gitsets.view && viewItem == set.favorited",
+          "group": "inline"
+        },
+        {
+          "command": "gitsets.addFavorite",
+          "when": "view == gitsets.view && (viewItem == repository || viewItem == set)",
+          "group": "inline"
+        },
+        {
+          "command": "gitsets.removeFavorite",
+          "when": "view == gitsets.view && (viewItem == repository.favorited || viewItem == set.favorited)",
           "group": "inline"
         }
       ],
@@ -135,6 +162,14 @@
         },
         {
           "command": "gitsets.openSet",
+          "when": "false"
+        },
+        {
+          "command": "gitsets.addFavorite",
+          "when": "false"
+        },
+        {
+          "command": "gitsets.removeFavorite",
           "when": "false"
         }
       ]

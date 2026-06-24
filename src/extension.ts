@@ -10,7 +10,7 @@ const CONFIG_SECTION = 'gitsets';
 const GITSETS_FILE = 'gitsets.json';
 
 export function activate(context: vscode.ExtensionContext) {
-  const provider = new GitSetsProvider();
+  const provider = new GitSetsProvider(context);
 
   // Watchers are scoped to the configured root folder and recreated when it
   // changes. Stored outside subscriptions so they can be disposed on reset.
@@ -52,10 +52,19 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('gitsets.refresh', () => provider.refresh()),
     vscode.commands.registerCommand('gitsets.expandAll', async () => {
       if (!getRootFolder()) return;
+      await treeView.reveal(provider.favoritesSection, { expand: 3 });
       await treeView.reveal(provider.reposSection, { expand: 3 });
       await treeView.reveal(provider.setsSection, { expand: 3 });
     }),
     vscode.commands.registerCommand('gitsets.openRepository', (node?: RepoNode) => openRepository(node)),
+    vscode.commands.registerCommand('gitsets.addFavorite', (node?: RepoNode | SetNode) => {
+      if (!node) return;
+      provider.toggleFavorite(node instanceof RepoNode ? node.repoPath : node.entry.path);
+    }),
+    vscode.commands.registerCommand('gitsets.removeFavorite', (node?: RepoNode | SetNode) => {
+      if (!node) return;
+      provider.toggleFavorite(node instanceof RepoNode ? node.repoPath : node.entry.path);
+    }),
     vscode.commands.registerCommand('gitsets.addSet', () => addSet(provider)),
     vscode.commands.registerCommand('gitsets.openSet', (node?: SetNode) => openSet(node)),
     vscode.commands.registerCommand('gitsets.openSettings', () =>
@@ -380,18 +389,34 @@ async function addSet(provider: GitSetsProvider): Promise<void> {
 
 // --- Tree --------------------------------------------------------------------
 
-type TreeNode = SectionNode | RepoNode | RepoGroupNode | SetGroupNode | SetNode | SetMemberNode | MessageNode;
+type TreeNode = SectionNode | FavoritesSectionNode | RepoNode | RepoGroupNode | SetGroupNode | SetNode | SetMemberNode | MessageNode;
 
 class GitSetsProvider implements vscode.TreeDataProvider<TreeNode> {
   private readonly _onDidChangeTreeData = new vscode.EventEmitter<TreeNode | undefined | void>();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
   // Stable references required by TreeView.reveal(), which matches by identity.
+  readonly favoritesSection = new FavoritesSectionNode();
   readonly reposSection = new SectionNode('repos');
   readonly setsSection = new SectionNode('sets');
 
   // Cached per refresh cycle; cleared by refresh() so the next render rescans.
   private _scanPromise: Promise<ScanResult> | undefined;
+  private _favorites: Set<string>;
+
+  constructor(private readonly context: vscode.ExtensionContext) {
+    this._favorites = new Set(context.globalState.get<string[]>('gitsets.favorites', []));
+  }
+
+  async toggleFavorite(itemPath: string): Promise<void> {
+    if (this._favorites.has(itemPath)) {
+      this._favorites.delete(itemPath);
+    } else {
+      this._favorites.add(itemPath);
+    }
+    await this.context.globalState.update('gitsets.favorites', [...this._favorites]);
+    this.refresh();
+  }
 
   refresh(): void {
     this._scanPromise = undefined;
@@ -423,28 +448,42 @@ class GitSetsProvider implements vscode.TreeDataProvider<TreeNode> {
       if (!getRootFolder()) {
         return [new MessageNode('Configure gitsets.rootFolder in settings', 'gear', 'msg:no-root')];
       }
-      return [this.reposSection, this.setsSection];
+      return [this.favoritesSection, this.reposSection, this.setsSection];
+    }
+
+    if (element instanceof FavoritesSectionNode) {
+      const { repos, sets } = await this.scan();
+      const entries = await loadSetEntries(sets);
+      const favRepos = repos.filter(r => this._favorites.has(r));
+      const favSets = entries.filter(e => this._favorites.has(e.path));
+      if (favRepos.length === 0 && favSets.length === 0) {
+        return [new MessageNode('No favorites yet — click ♥ on a repo or set', 'heart', 'msg:no-favorites')];
+      }
+      return [
+        ...favRepos.map(r => new RepoNode(r, path.basename(r), true, true)),
+        ...favSets.map(e => new SetNode(e, path.basename(e.path), true, true)),
+      ];
     }
 
     if (element instanceof SectionNode) {
       const { repos, sets } = await this.scan();
       if (element.section === 'repos') {
         const tree = buildPathTree(repos);
-        return renderRepoLevel([], tree);
+        return renderRepoLevel([], tree, this._favorites);
       }
       const entries = await loadSetEntries(sets);
       const tree = buildPathTree(sets);
-      return renderSetLevel([], tree, entries);
+      return renderSetLevel([], tree, entries, this._favorites);
     }
 
     if (element instanceof RepoGroupNode) {
-      return renderRepoLevel(element.prefix, element.subtree);
+      return renderRepoLevel(element.prefix, element.subtree, this._favorites);
     }
 
     if (element instanceof SetGroupNode) {
       const { sets } = await this.scan();
       const entries = await loadSetEntries(sets);
-      return renderSetLevel(element.prefix, element.subtree, entries);
+      return renderSetLevel(element.prefix, element.subtree, entries, this._favorites);
     }
 
     if (element instanceof SetNode) {
@@ -479,14 +518,22 @@ class SectionNode extends vscode.TreeItem {
   }
 }
 
+class FavoritesSectionNode extends vscode.TreeItem {
+  constructor() {
+    super('Favorites', vscode.TreeItemCollapsibleState.Expanded);
+    this.id = 'section:favorites';
+    this.contextValue = 'favoritesSection';
+  }
+}
+
 class RepoNode extends vscode.TreeItem {
-  constructor(public readonly repoPath: string, label = path.basename(repoPath)) {
+  constructor(public readonly repoPath: string, label = path.basename(repoPath), favorited = false, inFavoritesSection = false) {
     super(label, vscode.TreeItemCollapsibleState.None);
-    this.id = `repo:${repoPath}`;
+    this.id = `${inFavoritesSection ? 'fav-' : ''}repo:${repoPath}`;
     this.description = repoPath;
     this.tooltip = repoPath;
     this.iconPath = new vscode.ThemeIcon('repo', new vscode.ThemeColor('notificationsInfoIcon.foreground'));
-    this.contextValue = 'repository';
+    this.contextValue = favorited ? 'repository.favorited' : 'repository';
     this.resourceUri = vscode.Uri.file(repoPath);
   }
 }
@@ -508,13 +555,13 @@ class SetGroupNode extends vscode.TreeItem {
 }
 
 class SetNode extends vscode.TreeItem {
-  constructor(public readonly entry: SetEntry, label = path.basename(entry.path)) {
+  constructor(public readonly entry: SetEntry, label = path.basename(entry.path), favorited = false, inFavoritesSection = false) {
     super(label, vscode.TreeItemCollapsibleState.Collapsed);
-    this.id = `set:${entry.path}`;
+    this.id = `${inFavoritesSection ? 'fav-' : ''}set:${entry.path}`;
     this.description = entry.path;
     this.tooltip = entry.broken ? `${entry.path}\n(gitsets.json missing or invalid)` : entry.path;
     if (entry.broken) this.iconPath = new vscode.ThemeIcon('warning');
-    this.contextValue = 'set';
+    this.contextValue = favorited ? 'set.favorited' : 'set';
     this.resourceUri = vscode.Uri.file(entry.path);
   }
 }
@@ -541,18 +588,19 @@ class MessageNode extends vscode.TreeItem {
 
 // --- tree rendering ----------------------------------------------------------
 
-function renderRepoLevel(prefix: string[], tree: PathTree): TreeNode[] {
+function renderRepoLevel(prefix: string[], tree: PathTree, favorites: Set<string>): TreeNode[] {
   const nodes: TreeNode[] = [];
   for (const [seg, sub] of Object.entries(tree.groups)) {
     nodes.push(new RepoGroupNode([...prefix, seg], sub));
   }
   for (const name of tree.leaves) {
-    nodes.push(new RepoNode(path.join(tree.root, ...prefix, name), name));
+    const repoPath = path.join(tree.root, ...prefix, name);
+    nodes.push(new RepoNode(repoPath, name, favorites.has(repoPath)));
   }
   return nodes;
 }
 
-function renderSetLevel(prefix: string[], tree: PathTree, entries: SetEntry[]): TreeNode[] {
+function renderSetLevel(prefix: string[], tree: PathTree, entries: SetEntry[], favorites: Set<string>): TreeNode[] {
   const byPath = new Map(entries.map(e => [e.path, e]));
   const nodes: TreeNode[] = [];
   for (const [seg, sub] of Object.entries(tree.groups)) {
@@ -560,7 +608,7 @@ function renderSetLevel(prefix: string[], tree: PathTree, entries: SetEntry[]): 
   }
   for (const name of tree.leaves) {
     const entry = byPath.get(path.join(tree.root, ...prefix, name));
-    if (entry) nodes.push(new SetNode(entry, name));
+    if (entry) nodes.push(new SetNode(entry, name, favorites.has(entry.path)));
   }
   return nodes;
 }
