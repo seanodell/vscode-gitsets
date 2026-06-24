@@ -79,8 +79,16 @@ export function activate(context: vscode.ExtensionContext) {
       if (!node) return;
       store.toggleFavorite(node instanceof RepoNode ? node.repoPath : node.entry.path);
     }),
-    vscode.commands.registerCommand('gitsets.removeFavorite', (node?: RepoNode | SetNode) => {
+    vscode.commands.registerCommand('gitsets.removeFavorite', async (node?: RepoNode | SetNode) => {
       if (!node) return;
+      if (node.id?.startsWith('fav-')) {
+        const label = node instanceof RepoNode ? path.basename(node.repoPath) : node.entry.name;
+        const answer = await vscode.window.showWarningMessage(
+          `Remove "${label}" from favorites?`,
+          'Remove',
+        );
+        if (answer !== 'Remove') return;
+      }
       store.toggleFavorite(node instanceof RepoNode ? node.repoPath : node.entry.path);
     }),
     vscode.commands.registerCommand('gitsets.addSet', () => addSet(store)),
