@@ -2,6 +2,12 @@
 
 All notable changes to the Git Sets extension are documented here.
 
+## [0.4.0] - 2026-06-24
+
+### Added
+- **Favorites** — heart button (♥) on any repo or set adds it to a Favorites section in the Explorer sidebar for one-click access; removing from the Favorites view prompts for confirmation
+- **Three independent panels** — Favorites lives in Explorer; Repositories and Sets live in Source Control; each panel can be collapsed, moved, or dragged independently
+
 ## [0.3.1] - 2026-06-23
 
 ### Added
