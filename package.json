@@ -39,7 +39,9 @@
         {
           "id": "gitsets.favoritesView",
           "name": "Favorites"
-        },
+        }
+      ],
+      "scm": [
         {
           "id": "gitsets.reposView",
           "name": "Repositories"
