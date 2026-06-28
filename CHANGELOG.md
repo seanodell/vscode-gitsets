@@ -2,6 +2,12 @@
 
 All notable changes to the Git Sets extension are documented here.
 
+## [0.5.0] - 2026-06-28
+
+### Added
+- **Clone Repository** — plus button in the Repositories panel prompts for a GitHub URL and clones into `<rootFolder>/<org>/<repo>`; supports both HTTPS and SSH URL formats
+- **Settings gear on all panels** — the gear icon to open Git Sets settings now appears in the Favorites, Repositories, and Sets panel headers (was Sets only)
+
 ## [0.4.0] - 2026-06-24
 
 ### Added
