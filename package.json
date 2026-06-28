@@ -121,7 +121,7 @@
         },
         {
           "command": "gitsets.openSettings",
-          "when": "view == gitsets.setsView",
+          "when": "view =~ /^gitsets\\./",
           "group": "navigation@4"
         }
       ],
