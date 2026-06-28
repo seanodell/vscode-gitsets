@@ -91,6 +91,7 @@ export function activate(context: vscode.ExtensionContext) {
       }
       store.toggleFavorite(node instanceof RepoNode ? node.repoPath : node.entry.path);
     }),
+    vscode.commands.registerCommand('gitsets.cloneRepository', () => cloneRepository(store)),
     vscode.commands.registerCommand('gitsets.addSet', () => addSet(store)),
     vscode.commands.registerCommand('gitsets.openSet', (node?: SetNode) => openSet(node)),
     vscode.commands.registerCommand('gitsets.openSettings', () =>
@@ -312,6 +313,60 @@ async function openSet(node?: SetNode): Promise<void> {
     return;
   }
   await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(wsPath), { forceNewWindow: true });
+}
+
+function parseGitHubUrl(raw: string): { org: string; repo: string } | undefined {
+  const s = raw.trim();
+  const ssh = s.match(/^git@github\.com:([^/]+)\/([^/]+?)(?:\.git)?$/);
+  if (ssh) return { org: ssh[1], repo: ssh[2] };
+  const https = s.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/);
+  if (https) return { org: https[1], repo: https[2] };
+  return undefined;
+}
+
+async function cloneRepository(store: GitSetsStore): Promise<void> {
+  const rootFolder = getRootFolder();
+  if (!rootFolder) {
+    vscode.window.showErrorMessage('Configure gitsets.rootFolder in settings before cloning.');
+    return;
+  }
+
+  const url = await vscode.window.showInputBox({
+    title: 'Clone Repository',
+    prompt: 'GitHub repository URL',
+    placeHolder: 'https://github.com/org/repo',
+    validateInput: raw =>
+      raw.trim() && !parseGitHubUrl(raw)
+        ? 'Enter a valid GitHub URL (https://github.com/org/repo or git@github.com:org/repo)'
+        : undefined,
+  });
+  if (!url) return;
+
+  const parsed = parseGitHubUrl(url);
+  if (!parsed) return;
+
+  const targetPath = path.join(rootFolder, parsed.org, parsed.repo);
+  try {
+    await fs.access(targetPath);
+    vscode.window.showErrorMessage(`A folder already exists at: ${targetPath}`);
+    return;
+  } catch {
+    // Expected: folder does not yet exist.
+  }
+
+  await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: `Cloning ${parsed.org}/${parsed.repo}…`, cancellable: false },
+    async () => {
+      try {
+        await fs.mkdir(path.join(rootFolder, parsed.org), { recursive: true });
+        await runGit(['clone', url.trim(), targetPath], { cwd: rootFolder, timeoutMs: 300_000 });
+        store.refresh();
+        vscode.window.showInformationMessage(`Cloned ${parsed.org}/${parsed.repo}.`);
+      } catch (err) {
+        vscode.window.showErrorMessage(`Clone failed: ${errorText(err)}`);
+      }
+    },
+  );
 }
 
 async function addSet(store: GitSetsStore): Promise<void> {

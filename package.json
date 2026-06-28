@@ -90,6 +90,12 @@
         "icon": "$(window)"
       },
       {
+        "command": "gitsets.cloneRepository",
+        "title": "Clone Repository",
+        "category": "Git Sets",
+        "icon": "$(add)"
+      },
+      {
         "command": "gitsets.addFavorite",
         "title": "Add to Favorites",
         "category": "Git Sets",
@@ -113,6 +119,11 @@
           "command": "gitsets.expandAll",
           "when": "view == gitsets.reposView || view == gitsets.setsView",
           "group": "navigation@2"
+        },
+        {
+          "command": "gitsets.cloneRepository",
+          "when": "view == gitsets.reposView",
+          "group": "navigation@3"
         },
         {
           "command": "gitsets.addSet",
@@ -151,6 +162,10 @@
         {
           "command": "gitsets.openRepository",
           "when": "false"
+        },
+        {
+          "command": "gitsets.cloneRepository",
+          "when": "true"
         },
         {
           "command": "gitsets.expandAll",
